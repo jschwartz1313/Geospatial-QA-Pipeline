@@ -13,17 +13,16 @@ from geo_qa.models import LayerQAResult, PipelineRun, QAStatus
 logger = logging.getLogger(__name__)
 
 
-def generate_csv_report(results: list[LayerQAResult], output_path: Path) -> None:
+def generate_csv_dataframe(results: list[LayerQAResult]) -> pd.DataFrame:
     """
-    Generate CSV report from QA results.
+    Generate DataFrame from QA results.
 
     Args:
         results: List of LayerQAResult objects
-        output_path: Path to output CSV file
-    """
-    logger.info(f"Generating CSV report: {output_path}")
 
-    # Convert results to DataFrame rows
+    Returns:
+        DataFrame with all results
+    """
     rows = []
     for result in results:
         row = {
@@ -47,28 +46,40 @@ def generate_csv_report(results: list[LayerQAResult], output_path: Path) -> None
         }
         rows.append(row)
 
-    df = pd.DataFrame(rows)
-
-    # Write to CSV
-    df.to_csv(output_path, index=False)
-    logger.info(f"CSV report written: {output_path} ({len(rows)} layers)")
+    return pd.DataFrame(rows)
 
 
-def generate_markdown_report(
-    results: list[LayerQAResult],
-    output_path: Path,
-    run_metadata: PipelineRun,
-) -> None:
+def generate_csv_report(results: list[LayerQAResult], output_path: Path) -> None:
     """
-    Generate human-readable Markdown report.
+    Generate CSV report from QA results.
 
     Args:
         results: List of LayerQAResult objects
-        output_path: Path to output MD file
-        run_metadata: Pipeline run metadata
+        output_path: Path to output CSV file
     """
-    logger.info(f"Generating Markdown report: {output_path}")
+    logger.info(f"Generating CSV report: {output_path}")
 
+    df = generate_csv_dataframe(results)
+
+    # Write to CSV
+    df.to_csv(output_path, index=False)
+    logger.info(f"CSV report written: {output_path} ({len(results)} layers)")
+
+
+def generate_markdown_report_string(
+    results: list[LayerQAResult],
+    run_metadata: PipelineRun,
+) -> str:
+    """
+    Generate Markdown report as a string.
+
+    Args:
+        results: List of LayerQAResult objects
+        run_metadata: Pipeline run metadata
+
+    Returns:
+        Markdown formatted string
+    """
     lines = []
 
     # Header
@@ -173,9 +184,29 @@ def generate_markdown_report(
 
     lines.append("")
 
+    return "\n".join(lines)
+
+
+def generate_markdown_report(
+    results: list[LayerQAResult],
+    output_path: Path,
+    run_metadata: PipelineRun,
+) -> None:
+    """
+    Generate human-readable Markdown report.
+
+    Args:
+        results: List of LayerQAResult objects
+        output_path: Path to output MD file
+        run_metadata: Pipeline run metadata
+    """
+    logger.info(f"Generating Markdown report: {output_path}")
+
+    content = generate_markdown_report_string(results, run_metadata)
+
     # Write to file
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+        f.write(content)
 
     logger.info(f"Markdown report written: {output_path}")
 

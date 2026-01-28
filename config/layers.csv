@@ -1,4 +1,2 @@
 layer_name,service_url,expected_geometry,owner,notes
-sample_wetlands,https://services.arcgis.com/sample/wetlands/FeatureServer/0,Polygon,Environmental Team,For constraints screening
-sample_transmission,https://services.arcgis.com/sample/transmission/FeatureServer/0,Line,Grid Team,Transmission lines dataset
-sample_substations,https://services.arcgis.com/sample/substations/FeatureServer/0,Point,Grid Team,Substation locations
+runways,https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/Runways_View/FeatureServer/0,Polygon,FAA,Airport runway data

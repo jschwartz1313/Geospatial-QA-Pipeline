@@ -123,6 +123,26 @@ python -m geo_qa run \
 - `--retries` - Number of retry attempts for failed requests (default: 2)
 - `--log-level` - Console log level: DEBUG, INFO, WARNING, ERROR (default: INFO)
 
+### Web Interface (Streamlit)
+
+For an interactive web-based experience, run the Streamlit app:
+
+```bash
+# Run the web interface
+streamlit run geo_qa/web.py
+
+# Or with custom port
+streamlit run geo_qa/web.py --server.port 8080
+```
+
+The web interface provides:
+- **File Upload** - Upload a CSV config file or enter URLs directly
+- **Interactive Results** - View results in expandable tables with status indicators
+- **Detailed Drill-down** - Click on any layer to see all QA rule results with evidence
+- **Download Reports** - Export results as CSV, Markdown, or JSON
+
+Access the app at `http://localhost:8501` after running.
+
 ## Example Output
 
 ### Console Output
@@ -174,7 +194,9 @@ geo-qa/
 │   └── layers.csv               # Layer configuration (edit this)
 ├── geo_qa/
 │   ├── __init__.py
+│   ├── __main__.py              # Entry point for python -m geo_qa
 │   ├── cli.py                   # Command-line interface
+│   ├── web.py                   # Streamlit web interface
 │   ├── arcgis.py                # ArcGIS REST client + QA orchestration
 │   ├── rules.py                 # 9 QA rule implementations
 │   ├── models.py                # Pydantic data models
@@ -257,7 +279,7 @@ This tool is designed for production use with:
 
 Contributions welcome! Areas for improvement:
 - [ ] YAML config support (richer layer configuration)
-- [ ] HTML report generation (interactive web view)
+- [x] Interactive web view (Streamlit interface added)
 - [ ] Authentication support (OAuth, API keys)
 - [ ] Caching metadata to speed up repeat runs
 - [ ] GitHub Actions CI
@@ -276,6 +298,7 @@ Built with:
 - [GeoPandas](https://geopandas.org/) - Geospatial data handling
 - [Tenacity](https://tenacity.readthedocs.io/) - Retry logic
 - [Pydantic](https://docs.pydantic.dev/) - Data validation
+- [Streamlit](https://streamlit.io/) - Web interface
 
 ---
 

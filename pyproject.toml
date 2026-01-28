@@ -30,6 +30,7 @@ dependencies = [
     "geopandas>=0.14.0",
     "tenacity>=8.2.0",
     "pydantic>=2.5.0",
+    "streamlit>=1.29.0",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +44,7 @@ dev = [
 
 [project.scripts]
 geo-qa = "geo_qa.cli:main"
+geo-qa-web = "streamlit.web.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
