@@ -1,0 +1,111 @@
+{
+  "currentVersion": 10.91,
+  "id": 0,
+  "name": "Sample_Layer",
+  "type": "Feature Layer",
+  "description": "Sample ArcGIS REST layer for testing",
+  "geometryType": "esriGeometryPolygon",
+  "copyrightText": "",
+  "parentLayer": null,
+  "subLayers": [],
+  "minScale": 0,
+  "maxScale": 0,
+  "defaultVisibility": true,
+  "extent": {
+    "xmin": -180,
+    "ymin": -90,
+    "xmax": 180,
+    "ymax": 90,
+    "spatialReference": {
+      "wkid": 4326,
+      "latestWkid": 4326
+    }
+  },
+  "hasAttachments": false,
+  "htmlPopupType": "esriServerHTMLPopupTypeAsHTMLText",
+  "displayField": "NAME",
+  "typeIdField": null,
+  "fields": [
+    {
+      "name": "OBJECTID",
+      "type": "esriFieldTypeOID",
+      "alias": "OBJECTID",
+      "domain": null
+    },
+    {
+      "name": "NAME",
+      "type": "esriFieldTypeString",
+      "alias": "Name",
+      "length": 100,
+      "domain": null
+    },
+    {
+      "name": "TYPE",
+      "type": "esriFieldTypeString",
+      "alias": "Type",
+      "length": 50,
+      "domain": null
+    },
+    {
+      "name": "AREA",
+      "type": "esriFieldTypeDouble",
+      "alias": "Area",
+      "domain": null
+    },
+    {
+      "name": "Shape",
+      "type": "esriFieldTypeGeometry",
+      "alias": "Shape",
+      "domain": null
+    }
+  ],
+  "geometryField": {
+    "name": "Shape",
+    "type": "esriFieldTypeGeometry",
+    "alias": "Shape"
+  },
+  "indexes": [
+    {
+      "name": "FDO_OBJECTID",
+      "fields": "OBJECTID",
+      "isAscending": true,
+      "isUnique": true,
+      "description": ""
+    }
+  ],
+  "relationships": [],
+  "canModifyLayer": false,
+  "canScaleSymbols": false,
+  "hasLabels": false,
+  "capabilities": "Map,Query,Data",
+  "maxRecordCount": 1000,
+  "supportsStatistics": true,
+  "supportsAdvancedQueries": true,
+  "supportedQueryFormats": "JSON, geoJSON",
+  "isDataVersioned": false,
+  "ownershipBasedAccessControlForFeatures": {
+    "allowOthersToQuery": true
+  },
+  "useStandardizedQueries": true,
+  "advancedQueryCapabilities": {
+    "useStandardizedQueries": true,
+    "supportsStatistics": true,
+    "supportsHavingClause": true,
+    "supportsOrderBy": true,
+    "supportsDistinct": true,
+    "supportsCountDistinct": true,
+    "supportsPagination": true,
+    "supportsLod": false,
+    "supportsQueryWithLodSR": false,
+    "supportsTrueCurve": true,
+    "supportsQueryWithDatumTransformation": true,
+    "supportsReturningQueryExtent": true,
+    "supportsQueryWithDistance": true,
+    "supportsSqlExpression": true
+  },
+  "dateFieldsTimeReference": null,
+  "supportsCoordinatesQuantization": true,
+  "editFieldsInfo": {
+    "editDateField": "last_edited_date"
+  }
+}
