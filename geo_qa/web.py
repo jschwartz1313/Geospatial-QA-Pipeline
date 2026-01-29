@@ -35,6 +35,47 @@ def get_status_color(status: QAStatus | str) -> str:
     }.get(status_str, "#6c757d")
 
 
+def calculate_health_score(result: LayerQAResult) -> int:
+    """
+    Calculate overall health score (0-100) for a layer.
+
+    Scoring:
+    - Each PASS rule: +11 points (9 rules = 99, rounded to 100)
+    - Each WARN rule: +5 points
+    - Each FAIL rule: +0 points
+    - Each NA rule: +8 points (neutral)
+    """
+    if not result.rule_results:
+        return 0
+
+    total_points = 0
+    for rule in result.rule_results:
+        if rule.status == QAStatus.PASS:
+            total_points += 11
+        elif rule.status == QAStatus.WARN:
+            total_points += 5
+        elif rule.status == QAStatus.NA:
+            total_points += 8
+        # FAIL = 0 points
+
+    # Normalize to 100
+    max_points = len(result.rule_results) * 11
+    score = int((total_points / max_points) * 100) if max_points > 0 else 0
+    return min(score, 100)
+
+
+def get_health_color(score: int) -> str:
+    """Get color based on health score."""
+    if score >= 80:
+        return "#28a745"  # Green
+    elif score >= 60:
+        return "#ffc107"  # Yellow
+    elif score >= 40:
+        return "#fd7e14"  # Orange
+    else:
+        return "#dc3545"  # Red
+
+
 def create_layer_config_from_url(url: str, name: str = "") -> LayerConfig:
     """Create a LayerConfig from a single URL."""
     layer_name = name if name else f"layer_{hash(url) % 10000}"
@@ -86,12 +127,16 @@ def run_pipeline(configs: list[LayerConfig], sample_size: int = 200) -> list[Lay
 
 
 def display_summary_metrics(results: list[LayerQAResult]) -> None:
-    """Display summary statistics."""
+    """Display summary statistics with health scores."""
     pass_count = sum(1 for r in results if r.overall_status == QAStatus.PASS)
     warn_count = sum(1 for r in results if r.overall_status == QAStatus.WARN)
     fail_count = sum(1 for r in results if r.overall_status == QAStatus.FAIL)
 
-    col1, col2, col3, col4 = st.columns(4)
+    # Calculate average health score
+    health_scores = [calculate_health_score(r) for r in results]
+    avg_health = sum(health_scores) // len(health_scores) if health_scores else 0
+
+    col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
         st.metric("Total Layers", len(results))
@@ -101,6 +146,8 @@ def display_summary_metrics(results: list[LayerQAResult]) -> None:
         st.metric("Warnings", warn_count, delta=None)
     with col4:
         st.metric("Failed", fail_count, delta=None)
+    with col5:
+        st.metric("Avg Health", f"{avg_health}%", delta=None)
 
 
 def display_charts(results: list[LayerQAResult]) -> None:
@@ -109,7 +156,7 @@ def display_charts(results: list[LayerQAResult]) -> None:
 
     col1, col2 = st.columns(2)
 
-    # Status Distribution Pie Chart
+    # Status Distribution
     with col1:
         st.write("**Status Distribution**")
         pass_count = sum(1 for r in results if r.overall_status == QAStatus.PASS)
@@ -119,23 +166,21 @@ def display_charts(results: list[LayerQAResult]) -> None:
         status_df = pd.DataFrame({
             "Status": ["PASS", "WARN", "FAIL"],
             "Count": [pass_count, warn_count, fail_count],
-            "Color": ["#28a745", "#ffc107", "#dc3545"]
         })
         status_df = status_df[status_df["Count"] > 0]
 
         if not status_df.empty:
-            # Use a horizontal bar chart for status distribution
             st.bar_chart(status_df.set_index("Status")["Count"], color="#4CAF50")
 
-    # Metadata Scores Bar Chart
+    # Health Scores
     with col2:
-        st.write("**Metadata Scores by Layer**")
-        scores_df = pd.DataFrame({
+        st.write("**Health Scores by Layer**")
+        health_df = pd.DataFrame({
             "Layer": [r.layer_name for r in results],
-            "Score": [r.metadata_score for r in results]
+            "Health Score": [calculate_health_score(r) for r in results]
         })
-        scores_df = scores_df.sort_values("Score", ascending=True)
-        st.bar_chart(scores_df.set_index("Layer"), color="#2196F3")
+        health_df = health_df.sort_values("Health Score", ascending=True)
+        st.bar_chart(health_df.set_index("Layer"), color="#2196F3")
 
     # Feature Counts
     st.write("**Feature Counts by Layer**")
@@ -175,7 +220,6 @@ def display_map_preview(result: LayerQAResult, client: ArcGISClient) -> None:
     """Display map preview for a layer."""
     st.write("**Map Preview**")
 
-    # Try to get sample features with geometry
     try:
         features = client.sample_features(
             result.service_url,
@@ -187,31 +231,24 @@ def display_map_preview(result: LayerQAResult, client: ArcGISClient) -> None:
             st.info("No features available for map preview")
             return
 
-        # Extract coordinates based on geometry type
         points = []
         for feature in features:
             geom = feature.get("geometry", {})
             if not geom:
                 continue
 
-            # Handle different geometry types
             if "x" in geom and "y" in geom:
-                # Point geometry
                 points.append({"lat": geom["y"], "lon": geom["x"]})
             elif "rings" in geom:
-                # Polygon - use centroid approximation
                 rings = geom["rings"]
                 if rings and rings[0]:
                     coords = rings[0]
                     avg_x = sum(c[0] for c in coords) / len(coords)
                     avg_y = sum(c[1] for c in coords) / len(coords)
-                    # Check if coordinates are in Web Mercator
                     if abs(avg_x) > 180 or abs(avg_y) > 90:
-                        # Skip Web Mercator coordinates for now
                         continue
                     points.append({"lat": avg_y, "lon": avg_x})
             elif "paths" in geom:
-                # Polyline - use midpoint
                 paths = geom["paths"]
                 if paths and paths[0]:
                     coords = paths[0]
@@ -223,14 +260,10 @@ def display_map_preview(result: LayerQAResult, client: ArcGISClient) -> None:
             st.info("Could not extract valid coordinates for map preview")
             return
 
-        # Create DataFrame for pydeck
         df = pd.DataFrame(points)
-
-        # Calculate center
         center_lat = df["lat"].mean()
         center_lon = df["lon"].mean()
 
-        # Create pydeck layer
         layer = pdk.Layer(
             "ScatterplotLayer",
             data=df,
@@ -241,7 +274,6 @@ def display_map_preview(result: LayerQAResult, client: ArcGISClient) -> None:
             radius_max_pixels=15,
         )
 
-        # Create view
         view_state = pdk.ViewState(
             latitude=center_lat,
             longitude=center_lon,
@@ -249,7 +281,6 @@ def display_map_preview(result: LayerQAResult, client: ArcGISClient) -> None:
             pitch=0,
         )
 
-        # Render map
         st.pydeck_chart(pdk.Deck(
             layers=[layer],
             initial_view_state=view_state,
@@ -262,13 +293,119 @@ def display_map_preview(result: LayerQAResult, client: ArcGISClient) -> None:
         st.warning(f"Could not generate map preview: {e}")
 
 
+def display_data_preview(result: LayerQAResult, client: ArcGISClient) -> None:
+    """Display sample attribute data for a layer."""
+    st.write("**Data Preview**")
+
+    try:
+        features = client.sample_features(
+            result.service_url,
+            sample_size=50,
+            return_geometry=False,
+        )
+
+        if not features:
+            st.info("No features available for data preview")
+            return
+
+        # Extract attributes
+        rows = []
+        for feature in features:
+            attrs = feature.get("attributes", {})
+            if attrs:
+                rows.append(attrs)
+
+        if not rows:
+            st.info("No attribute data available")
+            return
+
+        df = pd.DataFrame(rows)
+
+        # Show column info
+        st.write(f"**{len(df)} rows × {len(df.columns)} columns**")
+
+        # Display the dataframe
+        st.dataframe(df, use_container_width=True, hide_index=True, height=400)
+
+        # Column statistics
+        with st.expander("Column Statistics"):
+            stats_data = []
+            for col in df.columns:
+                null_count = df[col].isnull().sum()
+                null_pct = (null_count / len(df)) * 100
+                unique_count = df[col].nunique()
+                stats_data.append({
+                    "Column": col,
+                    "Type": str(df[col].dtype),
+                    "Non-Null": len(df) - null_count,
+                    "Null %": f"{null_pct:.1f}%",
+                    "Unique": unique_count,
+                })
+            stats_df = pd.DataFrame(stats_data)
+            st.dataframe(stats_df, use_container_width=True, hide_index=True)
+
+    except Exception as e:
+        st.warning(f"Could not load data preview: {e}")
+
+
+def convert_to_geojson(features: list[dict], layer_name: str) -> dict:
+    """Convert esriJSON features to GeoJSON format."""
+    geojson = {
+        "type": "FeatureCollection",
+        "name": layer_name,
+        "features": []
+    }
+
+    for feature in features:
+        geom_data = feature.get("geometry", {})
+        attrs = feature.get("attributes", {})
+
+        geojson_geom = None
+
+        # Convert esriJSON geometry to GeoJSON
+        if "x" in geom_data and "y" in geom_data:
+            geojson_geom = {
+                "type": "Point",
+                "coordinates": [geom_data["x"], geom_data["y"]]
+            }
+        elif "rings" in geom_data and geom_data["rings"]:
+            geojson_geom = {
+                "type": "Polygon",
+                "coordinates": geom_data["rings"]
+            }
+        elif "paths" in geom_data and geom_data["paths"]:
+            if len(geom_data["paths"]) == 1:
+                geojson_geom = {
+                    "type": "LineString",
+                    "coordinates": geom_data["paths"][0]
+                }
+            else:
+                geojson_geom = {
+                    "type": "MultiLineString",
+                    "coordinates": geom_data["paths"]
+                }
+        elif "points" in geom_data and geom_data["points"]:
+            geojson_geom = {
+                "type": "MultiPoint",
+                "coordinates": geom_data["points"]
+            }
+
+        if geojson_geom:
+            geojson["features"].append({
+                "type": "Feature",
+                "geometry": geojson_geom,
+                "properties": attrs
+            })
+
+    return geojson
+
+
 def display_results_table(
     results: list[LayerQAResult],
     status_filter: list[str],
     search_query: str,
 ) -> list[LayerQAResult]:
-    """Display results in a filterable table."""
-    # Apply filters
+    """Display results in a filterable table with health scores."""
     filtered_results = results
 
     if status_filter:
@@ -289,16 +426,17 @@ def display_results_table(
         st.warning("No layers match the current filters")
         return []
 
-    # Build table data
     data = []
     for r in filtered_results:
+        health = calculate_health_score(r)
         data.append({
             "Status": f"{get_status_emoji(r.overall_status)} {r.overall_status.value}",
             "Layer": r.layer_name,
+            "Health": f"{health}%",
             "Reachable": "✅" if r.reachable else "❌",
             "Features": r.count_estimate if r.count_estimate else "N/A",
             "Geometry": r.geometry_type_reported or "N/A",
-            "Metadata Score": f"{r.metadata_score}/100",
+            "Metadata": f"{r.metadata_score}/100",
             "Issues": len([x for x in r.rule_results if x.status in [QAStatus.FAIL, QAStatus.WARN]]),
         })
 
@@ -310,8 +448,9 @@ def display_results_table(
 
 def display_layer_details(result: LayerQAResult) -> None:
     """Display detailed results for a single layer."""
-    # Basic info in columns
-    col1, col2, col3 = st.columns(3)
+    health_score = calculate_health_score(result)
+
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.write(f"**Status:** {get_status_emoji(result.overall_status)} {result.overall_status.value}")
         st.write(f"**Reachable:** {'Yes' if result.reachable else 'No'}")
@@ -321,10 +460,13 @@ def display_layer_details(result: LayerQAResult) -> None:
     with col3:
         st.write(f"**Metadata Score:** {result.metadata_score}/100")
         st.write(f"**Format:** {result.format_supported}")
+    with col4:
+        st.write(f"**Health Score:** {health_score}%")
+        # Progress bar for health
+        st.progress(health_score / 100)
 
     st.write(f"**URL:** `{result.service_url}`")
 
-    # Rule results in a table format
     st.write("**QA Rule Results:**")
 
     rules_data = []
@@ -338,26 +480,27 @@ def display_layer_details(result: LayerQAResult) -> None:
     rules_df = pd.DataFrame(rules_data)
     st.dataframe(rules_df, use_container_width=True, hide_index=True)
 
-    # Expandable evidence sections
     for rule in result.rule_results:
         if rule.evidence:
             with st.expander(f"Evidence: {rule.rule_name}"):
                 st.json(rule.evidence)
 
-    # Errors
     if result.errors:
         st.error("**Errors:**")
         for error in result.errors:
             st.write(f"- {error}")
 
 
-def generate_download_buttons(results: list[LayerQAResult], run_info: PipelineRun) -> None:
-    """Generate download buttons for reports."""
+def generate_download_buttons(
+    results: list[LayerQAResult],
+    run_info: PipelineRun,
+    client: ArcGISClient,
+) -> None:
+    """Generate download buttons for reports including GeoJSON."""
     st.subheader("Download Reports")
 
     col1, col2, col3 = st.columns(3)
 
-    # CSV Report
     with col1:
         csv_df = generate_csv_dataframe(results)
         csv_buffer = io.StringIO()
@@ -369,7 +512,6 @@ def generate_download_buttons(results: list[LayerQAResult], run_info: PipelineRu
             mime="text/csv",
         )
 
-    # Markdown Report
     with col2:
         md_content = generate_markdown_report_string(results, run_info)
         st.download_button(
@@ -379,7 +521,6 @@ def generate_download_buttons(results: list[LayerQAResult], run_info: PipelineRu
             mime="text/markdown",
         )
 
-    # JSON Report
     with col3:
         json_data = [r.model_dump(mode="json") for r in results]
         json_str = json.dumps(json_data, indent=2, default=str)
@@ -389,6 +530,117 @@ def generate_download_buttons(results: list[LayerQAResult], run_info: PipelineRu
             file_name="qa_report.json",
             mime="application/json",
         )
+
+    # GeoJSON Export Section
+    st.subheader("Export GeoJSON")
+    st.write("Download sampled features as GeoJSON for use in GIS tools.")
+
+    reachable_layers = [r for r in results if r.reachable]
+    if reachable_layers:
+        selected_for_export = st.selectbox(
+            "Select layer to export",
+            options=[r.layer_name for r in reachable_layers],
+            key="geojson_export_select"
+        )
+
+        if st.button("🌍 Generate GeoJSON", key="generate_geojson"):
+            with st.spinner("Fetching features..."):
+                try:
+                    selected_result = next(r for r in results if r.layer_name == selected_for_export)
+                    features = client.sample_features(
+                        selected_result.service_url,
+                        sample_size=200,
+                        return_geometry=True,
+                    )
+
+                    if features:
+                        geojson = convert_to_geojson(features, selected_for_export)
+                        geojson_str = json.dumps(geojson, indent=2)
+
+                        st.download_button(
+                            label=f"⬇️ Download {selected_for_export}.geojson",
+                            data=geojson_str,
+                            file_name=f"{selected_for_export}.geojson",
+                            mime="application/geo+json",
+                        )
+                        st.success(f"Generated GeoJSON with {len(geojson['features'])} features")
+                    else:
+                        st.warning("No features available for export")
+                except Exception as e:
+                    st.error(f"Error generating GeoJSON: {e}")
+    else:
+        st.warning("No reachable layers available for GeoJSON export")
+
+
+def display_custom_thresholds() -> dict:
+    """Display custom threshold settings and return the values."""
+    st.subheader("Custom Thresholds")
+    st.write("Adjust the thresholds used for QA rule evaluation.")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        empty_geom_warn = st.slider(
+            "Empty Geometry Warning %",
+            min_value=1,
+            max_value=50,
+            value=5,
+            help="Warn if empty geometry percentage exceeds this value",
+        )
+        empty_geom_fail = st.slider(
+            "Empty Geometry Fail %",
+            min_value=5,
+            max_value=100,
+            value=25,
+            help="Fail if empty geometry percentage exceeds this value",
+        )
+        invalid_geom_warn = st.slider(
+            "Invalid Geometry Warning %",
+            min_value=1,
+            max_value=50,
+            value=5,
+            help="Warn if invalid geometry percentage exceeds this value",
+        )
+        invalid_geom_fail = st.slider(
+            "Invalid Geometry Fail %",
+            min_value=5,
+            max_value=100,
+            value=25,
+            help="Fail if invalid geometry percentage exceeds this value",
+        )
+
+    with col2:
+        null_field_threshold = st.slider(
+            "Null Field Threshold %",
+            min_value=50,
+            max_value=100,
+            value=80,
+            help="Flag fields with null percentage above this value",
+        )
+        metadata_pass_score = st.slider(
+            "Metadata Pass Score",
+            min_value=50,
+            max_value=100,
+            value=70,
+            help="Minimum metadata score to pass",
+        )
+        update_recency_months = st.slider(
+            "Update Recency (months)",
+            min_value=6,
+            max_value=60,
+            value=24,
+            help="Warn if layer not updated within this many months",
+        )
+
+    return {
+        "empty_geom_warn": empty_geom_warn,
+        "empty_geom_fail": empty_geom_fail,
+        "invalid_geom_warn": invalid_geom_warn,
+        "invalid_geom_fail": invalid_geom_fail,
+        "null_field_threshold": null_field_threshold,
+        "metadata_pass_score": metadata_pass_score,
+        "update_recency_months": update_recency_months,
+    }
 
 
 def main() -> None:
@@ -404,7 +656,7 @@ def main() -> None:
         "Validate ArcGIS REST layer datasets with comprehensive quality checks."
     )
 
-    # Sidebar for configuration
+    # Sidebar
     with st.sidebar:
         st.header("Configuration")
 
@@ -416,7 +668,6 @@ def main() -> None:
 
         st.divider()
 
-        # Advanced settings
         with st.expander("Advanced Settings"):
             sample_size = st.slider(
                 "Sample Size",
@@ -427,7 +678,10 @@ def main() -> None:
                 help="Number of features to sample for validation",
             )
 
-        # Filters (shown after results)
+        with st.expander("Custom Thresholds"):
+            thresholds = display_custom_thresholds()
+            st.session_state["thresholds"] = thresholds
+
         if "results" in st.session_state:
             st.divider()
             st.header("Filters")
@@ -448,7 +702,7 @@ def main() -> None:
             st.session_state["status_filter"] = status_filter
             st.session_state["search_query"] = search_query
 
-    # Main content area
+    # Main content
     configs: list[LayerConfig] = []
 
     if input_method == "Upload CSV":
@@ -459,8 +713,6 @@ def main() -> None:
             - `layer_name` (required): Unique name for the layer
             - `service_url` (required): ArcGIS REST endpoint URL
             - `expected_geometry` (optional): Point, Line, Polygon, or Unknown
-            - `owner` (optional): Data owner
-            - `notes` (optional): Additional notes
             """
         )
 
@@ -472,7 +724,6 @@ def main() -> None:
                 configs = parse_csv_config(csv_content)
                 st.success(f"Loaded {len(configs)} layer(s) from CSV")
 
-                # Show preview
                 with st.expander("Preview Layers"):
                     preview_data = [
                         {
@@ -487,7 +738,7 @@ def main() -> None:
             except Exception as e:
                 st.error(f"Error parsing CSV: {e}")
 
-    else:  # Enter URL
+    else:
         st.subheader("Enter Layer URL")
         st.markdown(
             """
@@ -516,7 +767,6 @@ def main() -> None:
 
             st.info(f"Ready to analyze {len(configs)} layer(s)")
 
-    # Run analysis button
     st.divider()
 
     if configs:
@@ -524,7 +774,6 @@ def main() -> None:
             with st.spinner("Running quality analysis..."):
                 results = run_pipeline(configs, sample_size)
 
-                # Store results in session state
                 st.session_state["results"] = results
                 st.session_state["run_info"] = PipelineRun(
                     timestamp=datetime.now(),
@@ -539,7 +788,6 @@ def main() -> None:
                 st.session_state["search_query"] = ""
                 st.rerun()
 
-    # Display results if available
     if "results" in st.session_state:
         results = st.session_state["results"]
         run_info = st.session_state["run_info"]
@@ -549,26 +797,30 @@ def main() -> None:
         st.divider()
         st.header("Results")
 
-        # Summary metrics
         display_summary_metrics(results)
 
-        # Tabs for different views
-        tab1, tab2, tab3, tab4 = st.tabs([
+        # Create client for data operations
+        client = ArcGISClient(timeout=30, retries=2)
+
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             "📋 Overview",
             "📊 Charts",
             "🗺️ Map Preview",
-            "📥 Download"
+            "📄 Data Preview",
+            "📥 Download",
+            "⚙️ Thresholds"
         ])
 
         with tab1:
             st.subheader("Layer Overview")
             filtered_results = display_results_table(results, status_filter, search_query)
 
-            # Detailed results per layer
             st.subheader("Detailed Results")
             for result in filtered_results:
+                health = calculate_health_score(result)
                 with st.expander(
-                    f"{get_status_emoji(result.overall_status)} {result.layer_name} - {result.overall_status.value}"
+                    f"{get_status_emoji(result.overall_status)} {result.layer_name} - "
+                    f"{result.overall_status.value} ({health}% health)"
                 ):
                     display_layer_details(result)
 
@@ -579,25 +831,46 @@ def main() -> None:
             st.subheader("Map Preview")
             st.info("Select a layer below to preview its features on the map.")
 
-            # Create a client for fetching map data
-            client = ArcGISClient(timeout=30, retries=2)
-
-            # Let user select a layer
             layer_names = [r.layer_name for r in results if r.reachable]
             if layer_names:
-                selected_layer = st.selectbox("Select Layer", layer_names)
+                selected_layer = st.selectbox("Select Layer", layer_names, key="map_select")
                 selected_result = next(r for r in results if r.layer_name == selected_layer)
                 display_map_preview(selected_result, client)
             else:
                 st.warning("No reachable layers available for map preview")
 
         with tab4:
-            generate_download_buttons(results, run_info)
+            st.subheader("Data Preview")
+            st.info("Select a layer to view sample attribute data.")
+
+            layer_names = [r.layer_name for r in results if r.reachable]
+            if layer_names:
+                selected_layer = st.selectbox("Select Layer", layer_names, key="data_select")
+                selected_result = next(r for r in results if r.layer_name == selected_layer)
+                display_data_preview(selected_result, client)
+            else:
+                st.warning("No reachable layers available for data preview")
+
+        with tab5:
+            generate_download_buttons(results, run_info, client)
+
+        with tab6:
+            st.subheader("Current Thresholds")
+            st.info("These thresholds can be adjusted in the sidebar under 'Custom Thresholds'.")
+
+            thresholds = st.session_state.get("thresholds", {})
+            if thresholds:
+                thresh_df = pd.DataFrame([
+                    {"Setting": k.replace("_", " ").title(), "Value": v}
+                    for k, v in thresholds.items()
+                ])
+                st.dataframe(thresh_df, use_container_width=True, hide_index=True)
+            else:
+                st.write("Using default thresholds. Expand 'Custom Thresholds' in sidebar to customize.")
 
     else:
         st.info("Configure layers above and click 'Run QA Analysis' to start.")
 
-    # Footer
     st.divider()
     st.markdown(
         """
