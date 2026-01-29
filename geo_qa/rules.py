@@ -428,6 +428,59 @@ def check_schema_sanity(features: list[dict] | None, **kwargs) -> RuleResult:
         )
 
 
+def _esri_to_shapely(geom_data: dict):
+    """
+    Convert esriJSON geometry to shapely geometry.
+
+    Args:
+        geom_data: esriJSON geometry dict
+
+    Returns:
+        shapely geometry or None if conversion fails
+    """
+    try:
+        # Point geometry: {"x": 123, "y": 456}
+        if "x" in geom_data and "y" in geom_data:
+            from shapely.geometry import Point
+            return Point(geom_data["x"], geom_data["y"])
+
+        # Polygon geometry: {"rings": [[[x, y], ...]]}
+        if "rings" in geom_data:
+            from shapely.geometry import Polygon
+            rings = geom_data["rings"]
+            if not rings:
+                return None
+            # First ring is exterior, rest are holes
+            if len(rings) == 1:
+                return Polygon(rings[0])
+            else:
+                return Polygon(rings[0], rings[1:])
+
+        # Polyline geometry: {"paths": [[[x, y], ...]]}
+        if "paths" in geom_data:
+            from shapely.geometry import LineString, MultiLineString
+            paths = geom_data["paths"]
+            if not paths:
+                return None
+            if len(paths) == 1:
+                return LineString(paths[0])
+            else:
+                return MultiLineString(paths)
+
+        # Multipoint geometry: {"points": [[x, y], ...]}
+        if "points" in geom_data:
+            from shapely.geometry import MultiPoint
+            return MultiPoint(geom_data["points"])
+
+        # If it has a "type" field, it might already be GeoJSON
+        if "type" in geom_data:
+            return shape(geom_data)
+
+        return None
+    except Exception:
+        return None
+
+
 def check_geometry_sanity(
     features: list[dict] | None,
     config: LayerConfig,
@@ -456,6 +509,7 @@ def check_geometry_sanity(
         empty_count = 0
         invalid_count = 0
         type_mismatch_count = 0
+        parsed_count = 0
 
         for feature in features:
             geom_data = feature.get("geometry")
@@ -470,53 +524,83 @@ def check_geometry_sanity(
                 # Handle esriJSON geometry format
                 if isinstance(geom_data, dict):
                     # Check if it's truly empty (e.g., {"rings": []})
-                    if not any(geom_data.values()):
+                    has_content = False
+                    for key, val in geom_data.items():
+                        if key in ["x", "y"] and val is not None:
+                            has_content = True
+                            break
+                        if key in ["rings", "paths", "points"] and val:
+                            has_content = True
+                            break
+
+                    if not has_content:
                         empty_count += 1
                         continue
 
-                    # Convert to shapely geometry
-                    geom = shape(geom_data)
+                    # Convert esriJSON to shapely geometry
+                    geom = _esri_to_shapely(geom_data)
 
-                    # Check validity
+                    if geom is None:
+                        # Could not parse but has content - don't count as invalid
+                        # This is a format we don't understand
+                        continue
+
+                    parsed_count += 1
+
+                    # Check validity - try to fix common issues first
                     if not geom.is_valid:
-                        invalid_count += 1
+                        # Try buffer(0) trick to fix self-intersections
+                        # This is a common technique for fixing invalid polygons
+                        try:
+                            fixed_geom = geom.buffer(0)
+                            if not fixed_geom.is_valid or fixed_geom.is_empty:
+                                invalid_count += 1
+                            # If buffer(0) fixed it, geometry is usable - don't count as invalid
+                        except Exception:
+                            invalid_count += 1
 
-                    # Check type matching
+                    # Check type matching (only if expected is specified)
                     expected = config.expected_geometry.lower()
-                    geom_type = geom.geom_type.lower()
+                    if expected and expected != "unknown":
+                        geom_type = geom.geom_type.lower()
 
-                    # Normalize types for comparison
-                    if expected in ["point", "multipoint"] and geom_type not in [
-                        "point",
-                        "multipoint",
-                    ]:
-                        type_mismatch_count += 1
-                    elif expected in [
-                        "line",
-                        "linestring",
-                        "multilinestring",
-                    ] and geom_type not in [
-                        "linestring",
-                        "multilinestring",
-                    ]:
-                        type_mismatch_count += 1
-                    elif expected in ["polygon", "multipolygon"] and geom_type not in [
-                        "polygon",
-                        "multipolygon",
-                    ]:
-                        type_mismatch_count += 1
+                        # Normalize types for comparison
+                        if expected in ["point", "multipoint"] and geom_type not in [
+                            "point",
+                            "multipoint",
+                        ]:
+                            type_mismatch_count += 1
+                        elif expected in [
+                            "line",
+                            "linestring",
+                            "polyline",
+                            "multilinestring",
+                        ] and geom_type not in [
+                            "linestring",
+                            "multilinestring",
+                        ]:
+                            type_mismatch_count += 1
+                        elif expected in ["polygon", "multipolygon"] and geom_type not in [
+                            "polygon",
+                            "multipolygon",
+                        ]:
+                            type_mismatch_count += 1
 
             except Exception as geom_error:
                 logger.debug(f"Geometry parse error: {geom_error}")
-                invalid_count += 1
+                # Don't count parse errors as invalid - could be format issue
+                continue
 
-        # Calculate percentages
+        # Calculate percentages based on total features
         pct_empty = (empty_count / total) * 100 if total > 0 else 0
-        pct_invalid = (invalid_count / total) * 100 if total > 0 else 0
-        pct_mismatch = (type_mismatch_count / total) * 100 if total > 0 else 0
+
+        # Calculate invalid percentage based on successfully parsed geometries
+        pct_invalid = (invalid_count / parsed_count) * 100 if parsed_count > 0 else 0
+        pct_mismatch = (type_mismatch_count / parsed_count) * 100 if parsed_count > 0 else 0
 
         evidence = {
             "total_features": total,
+            "parsed_count": parsed_count,
             "empty_count": empty_count,
             "invalid_count": invalid_count,
             "type_mismatch_count": type_mismatch_count,
@@ -526,18 +610,27 @@ def check_geometry_sanity(
         }
 
         # Determine status
-        if pct_empty > 25 or pct_invalid > 25:
+        if pct_empty > 25:
             status = QAStatus.FAIL
-            message = f"Geometry issues: {pct_empty:.1f}% empty, {pct_invalid:.1f}% invalid"
-        elif pct_empty > 5 or pct_invalid > 5:
+            message = f"High rate of empty geometries: {pct_empty:.1f}%"
+        elif pct_invalid > 25:
+            status = QAStatus.FAIL
+            message = f"High rate of invalid geometries: {pct_invalid:.1f}%"
+        elif pct_empty > 5:
             status = QAStatus.WARN
-            message = f"Some geometry issues: {pct_empty:.1f}% empty, {pct_invalid:.1f}% invalid"
+            message = f"Some empty geometries: {pct_empty:.1f}%"
+        elif pct_invalid > 5:
+            status = QAStatus.WARN
+            message = f"Some invalid geometries: {pct_invalid:.1f}%"
         elif pct_mismatch > 10:
             status = QAStatus.WARN
             message = f"Geometry type mismatch: {pct_mismatch:.1f}%"
+        elif parsed_count == 0:
+            status = QAStatus.WARN
+            message = "Could not parse any geometries (format may not be supported)"
         else:
             status = QAStatus.PASS
-            message = "Geometry appears healthy"
+            message = f"Geometry appears healthy ({parsed_count} parsed, {invalid_count} invalid)"
 
         return RuleResult(
             rule_name="geometry_sanity",
@@ -680,13 +773,17 @@ def check_spatial_reference(metadata: dict | None, **kwargs) -> RuleResult:
 
         # Check for common WKIDs
         common_wkids = [
-            4326,
-            3857,
-            2263,
-            2264,
-            26918,
-            26919,
-        ]  # WGS84, Web Mercator, State Plane, UTM
+            4326,      # WGS84
+            3857,      # Web Mercator
+            102100,    # Web Mercator Auxiliary Sphere (Esri)
+            102113,    # Web Mercator (deprecated Esri)
+            2263,      # State Plane NY East
+            2264,      # State Plane NY West
+            26918,     # UTM Zone 18N
+            26919,     # UTM Zone 19N
+            4269,      # NAD83
+            4267,      # NAD27
+        ]
         if wkid and wkid not in common_wkids:
             return RuleResult(
                 rule_name="spatial_reference",

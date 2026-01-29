@@ -1,0 +1,305 @@
+PROJECT 2 (DETAILED) — Geospatial Dataset QA & Validation Pipeline (ArcGIS REST)
+
+You are an expert data ops / analytics engineer. Build a repeatable QA pipeline for ArcGIS REST layers that produces a standardized report suitable for operationalizing geospatial datasets in energy siting workflows.
+
+================================================================================
+1) OBJECTIVE (WHAT "DONE" LOOKS LIKE)
+================================================================================
+A Python CLI that:
+- Reads a config list of ArcGIS REST layer URLs (10–30 layers)
+- Pulls metadata and runs QA rules
+- Downloads a small sample of features (if possible) for geometry and schema checks
+- Produces:
+  - outputs/qa_report.csv (1 row per layer)
+  - outputs/qa_report.md (human-readable)
+  - outputs/issues/<layer_name>.json (detailed issues, raw metadata excerpts)
+  - outputs/logs/run.log
+
+Key property: one bad layer must NOT crash the entire run.
+
+================================================================================
+2) WHY THIS PROJECT IS HIGH-SIGNAL
+================================================================================
+Most candidates can “analyze data.” Very few can demonstrate:
+- Reliability engineering mindset (timeouts, retries)
+- Data contracts (schema + geometry expectations)
+- Observability (logs + summaries)
+- Operational reporting (PASS/WARN/FAIL)
+
+This directly supports Data Ops, Analytics Engineering, and GIS QA roles.
+
+================================================================================
+3) TECH STACK + TOOLS (REQUIRED)
+================================================================================
+Language:
+- Python 3.11+
+
+Libraries:
+- requests
+- pandas
+- pyyaml (if YAML config) OR csv module
+- shapely (geometry validation)
+- geopandas (optional, helpful for CRS + geodata handling)
+- tenacity (recommended) for retries/backoff
+- pydantic (recommended) for config + output schemas
+- pytest, ruff, black
+
+VS Code:
+- Python extension
+- Ruff extension (optional)
+
+================================================================================
+4) REPO STRUCTURE
+================================================================================
+geo-qa/
+  README.md
+  pyproject.toml
+  uv.lock (if using uv)
+  .gitignore
+  config/
+    layers.csv
+    layers.yaml (optional)
+  geo_qa/
+    __init__.py
+    cli.py
+    arcgis.py
+    rules.py
+    models.py
+    report.py
+    logging_config.py
+    utils.py
+  tests/
+    test_rules_unit.py
+    test_arcgis_client.py
+    fixtures/
+      metadata_example.json
+  .vscode/
+    settings.json
+    tasks.json
+    launch.json
+
+================================================================================
+5) CONFIG FORMAT (CHOOSE ONE)
+================================================================================
+Option A: CSV (simplest)
+config/layers.csv columns:
+- layer_name
+- service_url
+- expected_geometry (Point|Line|Polygon|Unknown)
+- owner (optional)
+- notes (optional)
+
+Option B: YAML (richer)
+layers:
+  - layer_name: wetlands
+    service_url: ...
+    expected_geometry: Polygon
+    required_fields: ["NAME", "TYPE"]
+    notes: "For constraints screening."
+
+For MVP, implement CSV; add YAML support as stretch.
+
+================================================================================
+6) ARCGIS REST CLIENT (geo_qa/arcgis.py)
+================================================================================
+Implement ArcGISClient with methods:
+
+- fetch_metadata(service_url) -> dict
+  GET {service_url}?f=pjson
+
+- count_features(service_url, where="1=1") -> int|None
+  GET {service_url}/query?where=1%3D1&returnCountOnly=true&f=pjson
+
+- sample_features(service_url, sample_size=200, where="1=1", out_fields="*", return_geometry=true)
+  Use pagination:
+    resultOffset=0
+    resultRecordCount=min(sample_size, maxRecordCount)
+  Stop once collected sample_size or service exhausted.
+
+- determine_format_support(service_url)
+  Try f=geojson for query; fallback to pjson.
+  Record which formats work.
+
+Networking rules:
+- timeouts: connect 5s, read 20s default (configurable)
+- retries: 2 attempts with exponential backoff on 429/5xx/timeouts
+- polite sleep: 0.2s between requests
+
+================================================================================
+7) QA RULES (geo_qa/rules.py)
+================================================================================
+Implement rules as composable functions returning:
+- status: PASS/WARN/FAIL
+- message: concise explanation
+- evidence: structured dict
+
+Rules to implement (MVP):
+
+A) Reachability
+- metadata fetch works
+FAIL if cannot fetch or parse JSON.
+
+B) Queryability
+- returnCountOnly works (where=1=1)
+WARN if count fails but metadata works.
+
+C) Metadata completeness score (0–100)
+- Has description (10)
+- Has geometryType (20)
+- Has extent (20)
+- Has fields list with >= 3 fields (20)
+- Has capabilities string (10)
+- Has maxRecordCount (10)
+- Has supportsPagination or supportsQueryWithPagination (10 if present)
+
+D) Record availability
+- If count == 0 => WARN (or FAIL if expected non-empty)
+
+E) Pagination support
+- If count > maxRecordCount:
+  - attempt a second page query (offset=maxRecordCount) and see if returns valid response
+  - PASS if paginates, FAIL if not
+
+F) Schema sanity
+- Detect:
+  - duplicate field names
+  - unusually high nulls for many fields in sample
+  - absence of OBJECTID-like field
+Implementation:
+- From sample features, build dataframe of attributes
+- Compute null_pct for each column
+- Flag if >= 5 fields have null_pct > 0.8 (WARN)
+
+G) Geometry sanity (if returnGeometry works)
+- From sample features:
+  - percent_empty_geometry
+  - percent_invalid_geometry (shapely.is_valid)
+  - geometry type mismatch vs expected
+FAIL if > 25% empty or > 25% invalid.
+WARN if > 5% invalid.
+
+H) Update recency (if lastEditDate present)
+- Parse lastEditDate epoch ms
+- WARN if older than threshold_months (default 24)
+
+I) Spatial reference sanity
+- Check wkid present in metadata; WARN if missing.
+- If wkid is unusual or unknown, WARN.
+
+Each rule should run independently and never throw uncaught exceptions.
+
+================================================================================
+8) SCORING + FINAL STATUS (PASS/WARN/FAIL)
+================================================================================
+Combine rule outputs:
+- If any FAIL => overall FAIL
+- Else if any WARN => overall WARN
+- Else PASS
+
+Also compute:
+- metadata_score (0–100)
+- issue_count_fail, issue_count_warn
+
+================================================================================
+9) OUTPUTS (geo_qa/report.py)
+================================================================================
+A) qa_report.csv columns (minimum):
+- layer_name
+- service_url
+- overall_status
+- reachable (T/F)
+- count_estimate
+- geometry_type_reported
+- expected_geometry
+- max_record_count
+- pagination_ok (PASS/WARN/FAIL/NA)
+- metadata_score
+- null_fields_over_80pct
+- pct_invalid_geometry
+- pct_empty_geometry
+- last_edit_date
+- format_supported (geojson|pjson|both|unknown)
+- top_issues (string; semicolon separated)
+
+B) qa_report.md sections:
+- Run metadata (timestamp, #layers)
+- Summary counts (#PASS/#WARN/#FAIL)
+- Table of FAIL and WARN first
+- “Most common issues” (aggregate)
+
+C) issues/<layer_name>.json includes:
+- raw metadata (or excerpt)
+- rule results with evidence
+- errors/exceptions captured
+
+D) logs/run.log
+
+================================================================================
+10) CLI (geo_qa/cli.py)
+================================================================================
+Command:
+python -m geo_qa run --config config/layers.csv --out outputs --sample-size 200 --timeout 20 --retries 2
+
+Behavior:
+- Creates outputs folder
+- Writes log
+- Writes outputs even if some layers fail
+
+================================================================================
+11) IMPLEMENTATION TIMELINE (2–3 WEEKS)
+================================================================================
+WEEK 0 (SETUP)
+- Repo skeleton, uv env, CLI skeleton
+- Implement config reader + output folder setup
+
+WEEK 1 (ARCGIS CLIENT + BASIC QA)
+- arcgis.py: metadata + count + sample
+- rules A–D
+- Generate qa_report.csv
+
+Acceptance: run on >= 10 layers with stable output.
+
+WEEK 2 (ROBUSTNESS + REPORTS)
+- Implement pagination rule
+- Implement schema checks
+- Implement geometry checks + invalid geometry %
+- Write qa_report.md and per-layer issues JSON
+- Add tests (mock responses)
+
+Acceptance: clear PASS/WARN/FAIL and human-readable md.
+
+WEEK 3 (PORTFOLIO POLISH)
+- README + screenshots
+- GitHub Actions CI (optional)
+- Add YAML config support (optional)
+- Add caching to speed repeat runs (optional)
+
+================================================================================
+12) VS CODE WORKFLOW
+================================================================================
+- Add .vscode/tasks.json:
+  - test: pytest
+  - lint: ruff check .
+  - format: black .
+- Add launch.json to debug CLI with args
+- Use Output panel to view run.log
+
+================================================================================
+13) TESTING PLAN
+================================================================================
+- Unit tests for each QA rule with mocked metadata + sample features
+- Unit test pagination logic (count > maxRecordCount => multi-call)
+- Snapshot test for markdown report (optional)
+
+================================================================================
+14) PORTFOLIO README REQUIREMENTS
+================================================================================
+Include:
+- Problem statement: “Operationalizing ArcGIS REST layers is fragile; this tool standardizes QA.”
+- What checks are performed
+- How to run locally
+- How to add layers
+- Example output snippet of FAIL/WARN results
+- Limitations (public endpoints variability)
+
+END.

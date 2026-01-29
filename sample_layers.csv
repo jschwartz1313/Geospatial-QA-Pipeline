@@ -1,0 +1,5 @@
+layer_name,service_url,expected_geometry,owner,notes
+runways,https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/Runways_View/FeatureServer/0,Polygon,FAA,Airport runway polygons
+us_cities_sample,https://sampleserver6.arcgisonline.com/arcgis/rest/services/USA/MapServer/0,Point,Esri,Sample server cities
+us_states_sample,https://sampleserver6.arcgisonline.com/arcgis/rest/services/USA/MapServer/2,Polygon,Esri,Sample server states
+us_highways,https://sampleserver6.arcgisonline.com/arcgis/rest/services/USA/MapServer/1,Line,Esri,Sample server highways
